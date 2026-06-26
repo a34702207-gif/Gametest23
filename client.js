@@ -1,75 +1,74 @@
-import java.util.HashMap;
-import java.util.Map;
+try {
+    // 1. Создание команд с нужными именами и цветами
+    // Админы - Черная команда, Игроки - Синяя команда
+    Teams.Add("admins", "Админы", { r: 0, g: 0, b: 0 });
+    Teams.Add("players", "Игроки", { r: 0, g: 0, b: 255 });
 
-public class CustomGameMode {
+    var adminsTeam = Teams.Get("admins");
+    var playersTeam = Teams.Get("players");
+
+    // 2. Настройка точек спавна для каждой команды
+    adminsTeam.Spawns.SpawnPointsGroups.Add(2); // Группа спавна для Админов
+    playersTeam.Spawns.SpawnPointsGroups.Add(1); // Группа спавна для Игроков
+
+    // 3. Конфигурация игровых правил (Таймер и Очки)
+    Properties.GetContext().MainTimer.Value = 300; // Раунд длится 5 минут (300 секунд)
     
-    private int matchTimeInSeconds = 300; // 5 минут на раунд
-    private Map<String, Integer> teamScores;
-    private boolean isGameActive = false;
+    // Лимит убийств для победы (например, 50 очков)
+    var matchScore = Properties.GetContext().MaxScore;
+    matchScore.Value = 50;
 
-    public void startMode() {
-        teamScores = new HashMap<>();
-        teamScores.put("Red", 0);
-        teamScores.put("Blue", 0);
-        
-        isGameActive = true;
-        System.out.println("Режим игры запущен! Время раунда: " + matchTimeInSeconds + " сек.");
-        
-        startTimer();
-    }
+    // 4. Ограничения на инвентарь и игровой процесс
+    // Отключаем режим строительства, чтобы блоки нельзя было ставить и ломать
+    Breathing.PlayerSync.GetContext().Build.Value = false; 
+    
+    // Настраиваем инвентарь по умолчанию при возрождении
+    var inventory = Inventory.GetContext();
+    inventory.Main.Value = false;       // Отключаем основной слот (автоматы/винтовки)
+    inventory.Secondary.Value = true;    // Включаем вторичный слот (пистолеты)
+    inventory.Melee.Value = false;       // Отключаем нож/холодное оружие
+    inventory.Explosive.Value = false;   // Отключаем гранаты
+    inventory.Build.Value = false;       // Отключаем блоки для постройки
 
-    public void onPlayerSpawn(String player, String team) {
-        if (!isGameActive) return;
-
-        // Логика телепортации на базу в зависимости от команды
-        if (team.equals("Red")) {
-            // teleportPlayer(player, spawnPointRedX, spawnPointRedY, spawnPointRedZ);
-        } else if (team.equals("Blue")) {
-            // teleportPlayer(player, spawnPointBlueX, spawnPointBlueY, spawnPointBlueZ);
-        }
-    }
-
-    public void onPlayerKilled(String killer, String victim, String killerTeam) {
-        if (!isGameActive) return;
-
-        // Начисление очков
-        int currentScore = teamScores.getOrDefault(killerTeam, 0);
-        teamScores.put(killerTeam, currentScore + 1);
-        
-        System.out.println("Игрок " + killer + " убил " + victim + "! Счет команды " + killerTeam + ": " + teamScores.get(killerTeam));
-
-        checkWinCondition();
-    }
-
-    private void startTimer() {
-        // Упрощенная логика тиков
-        new Thread(() -> {
-            while (matchTimeInSeconds > 0 && isGameActive) {
-                try {
-                    Thread.sleep(1000); // Пауза 1 секунда
-                    matchTimeInSeconds--;
-                    // updateUI("Осталось времени: " + matchTimeInSeconds);
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                }
-            }
-            endGame("Время вышло!");
-        }).start();
-    }
-
-    private void checkWinCondition() {
-        // Условие победы, например, 50 очков
-        for (Map.Entry<String, Integer> entry : teamScores.entrySet()) {
-            if (entry.getValue() >= 50) {
-                endGame("Победа команды " + entry.getKey());
+    // 5. Обработка старта игры и распределения игроков
+    Event.OnStartGame.Add(function() {
+        var allPlayers = Players.All;
+        for (var i = 0; i < allPlayers.length; i++) {
+            // Разделяем зашедших: первый админ, остальные игроки (или по вашему выбору)
+            if (i === 0) {
+                adminsTeam.Add(allPlayers[i]);
+            } else {
+                playersTeam.Add(allPlayers[i]);
             }
         }
-    }
+    });
 
-    private void endGame(String reason) {
-        isGameActive = false;
-        System.out.println("Игра окончена. Причина: " + reason);
-        // showWinnerScreen(teamScores);
-    }
-  }
-      
+    // 6. Логика возрождения (Spawn) игроков
+    Event.OnPlayerSpawn.Add(function(player) {
+        // Убеждаемся, что при каждом спавне у всех чистится лишнее оружие
+        var pInventory = player.Inventory;
+        pInventory.Main.Value = false;
+        pInventory.Secondary.Value = true; // Оставляем доступным только пистолет
+        pInventory.Melee.Value = false;
+        pInventory.Explosive.Value = false;
+        pInventory.Build.Value = false;
+    });
+
+    // 7. Отслеживание смертей и начисление очков командам
+    Event.OnPlayerDeath.Add(function(player, killer) {
+        if (killer != null && killer.Team != player.Team) {
+            killer.Team.Properties.Get("deaths").Value += 1; // Добавляем фраг команде
+        }
+        // Мгновенный перезапуск спавна через 3 секунды после смерти
+        player.Spawns.Spawn();
+    });
+
+    // 8. Окончание таймера — перезапуск матча
+    Event.OnTimer.Add(function() {
+        Game.RestartGame();
+    });
+
+} catch (e) {
+    // В случае ошибки выводим логи в системную команду
+    Teams.Add("ErrorTeam", "Ошибка скрипта: " + e.message, { r: 255, g: 0, b: 0 });
+        }
